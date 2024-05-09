@@ -1,6 +1,6 @@
 pipeline {
-    /* agent any */
-    agent {label 'master'}
+    agent any
+
     stages {
         stage('clone poky dunfell') {
             steps {

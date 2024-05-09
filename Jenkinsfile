@@ -8,7 +8,6 @@ pipeline {
     docker {
       image 'crops/yocto:ubuntu-20.04-base'
       args '-v /var/jenkins:/var/jenkins'
-      label 'yocto'
       reuseNode true
     }
   }

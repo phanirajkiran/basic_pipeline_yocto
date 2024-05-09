@@ -20,19 +20,9 @@ pipeline {
                 cd poky
                 source oe-init-build-env
                 # ln -s /media/data/.yoctoshare/downloads ./downloads
-                bitbake core-image-minimal --runall=fetch
-                '''
-            }
-        }
-        stage('build poky image') {
-            steps {
-            sh '''#!/bin/bash
-                set -x
-                cd poky
-                source oe-init-build-env
                 bitbake core-image-minimal
                 '''
             }
         }
+        }
     } 
-}

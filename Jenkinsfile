@@ -1,92 +1,88 @@
+
+void setBuildStatus(String message, String state) {
+  step([
+      $class: "GitHubCommitStatusSetter",
+      reposSource: [$class: "ManuallyEnteredRepositorySource", url: "https://github.com/MohamedSa3eed/yocto-platoon"],
+      contextSource: [$class: "ManuallyEnteredCommitContextSource", context: "ci/jenkins/build-status"],
+      errorHandlers: [[$class: "ChangingBuildStatusErrorHandler", result: "UNSTABLE"]],
+      statusResultSource: [ $class: "ConditionalStatusResultSource", results: [[$class: "AnyBuildResult", message: message, state: state]] ]
+  ]);
+}
+
+
+
+
 pipeline {
+
     agent any
-    parameters {
-        choice(
-            name: 'Image', 
-            choices: ['full-image', 'system-update-bundle', 'recovery-update-bundle'], 
-            description: 'Select the build artefact to be created.')
-        choice(
-            name: 'Cache', 
-            choices: ['Wipe', 'Keep', 'Clean'], 
-            description: '''Select how the build cache should be handled. 
-                >Wipe< erases the Yocto workdir,
-                >Keep< reuses the existing build cache and
-                >Clean< runs bitbake cleanup for the build target.
-                ''')
-        booleanParam(
-            name: 'RecreateEnvironment',
-            defaultValue: false,
-            description: 'Recreate the build environment?')
-    }
+
     environment {
-        BRANCH = 'kirkstone'
-        MACHINE = 'raspberrypi3'
-        RELEASE_TAG = "${BRANCH}"
-        ENV_FILE = """\
-            USER=jenkins
-            MOUNT_VOLUME=jenkins_agent_workspace:${WORKSPACE}/..
-            PROJECT_ROOT=${WORKSPACE}
-            POKY_DIR=sources/poky
-            BUILD_DIR=build
-            PROJECT_TEMPLATE_DIR=config
-            MACHINE=${MACHINE}
-            BSP_LAYERS=${WORKSPACE}/sources/boards/raspberrypi/meta-raspberrypi,${WORKSPACE}/sources/boards/raspberrypi/meta-raspberrypi-multiboot-update
-            ROOT_PWD=super-secret-root-pwd
-            KEYBOARD_PROFILE=de-latin1.map
-            NETWORK_STATIC_IP=127.0.0.1
-            WIFI_SSID=Dummy-Network
-            WIFI_PWD=also-secret-network-pwd
-        """.stripIndent().stripMargin()
+        YOCTO_HOME = "/var/lib/jenkins/workspace/harmony-pipeline"
     }
+
     stages {
-        stage('Checkout') {
+        stage('Initialization') {
             steps {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: "${BRANCH}"]],
-                    userRemoteConfigs: [[url: 'https://github.com/JSydll/emx-base-stack']],
-                    extensions: [[$class: 'SubmoduleOption', recursiveSubmodules: true]]
-                ])
+                script {
+                    // Check if repositories exist
+                    def reposExist = fileExists("$YOCTO_HOME/poky") && fileExists("$YOCTO_HOME/meta-openembedded") && fileExists("$YOCTO_HOME/meta-raspberrypi") && fileExists("$YOCTO_HOME/meta-qt5")
+
+                    if (!reposExist) {
+                        // Clone Yocto repositories if they don't exist
+                        sh "git clone -b kirkstone git://git.yoctoproject.org/poky.git $YOCTO_HOME/poky"
+                        sh "git clone -b kirkstone git://git.openembedded.org/meta-openembedded $YOCTO_HOME/meta-openembedded"
+                        sh "git clone -b kirkstone git://git.yoctoproject.org/meta-raspberrypi $YOCTO_HOME/meta-raspberrypi"
+                        sh "git clone -b kirkstone https://github.com/meta-qt5/meta-qt5.git  $YOCTO_HOME/meta-qt5"
+
+                        // Initialize build environment before building the image
+                        sh '''#!/bin/bash
+                            source $YOCTO_HOME/poky/oe-init-build-env build-platoon
+                            bitbake-layers add-layer $YOCTO_HOME/meta-openembedded/meta-oe
+                            bitbake-layers add-layer $YOCTO_HOME/meta-raspberrypi
+                            bitbake-layers add-layer $YOCTO_HOME/meta-harmony/meta-apps
+                            bitbake-layers add-layer $YOCTO_HOME/meta-harmony/meta-harmonyOS
+                            bitbake-layers add-layer $YOCTO_HOME/meta-qt5
+
+
+                        '''
+
+                        // Modify local.conf
+                        sh "echo 'MACHINE = \"raspberrypi3-64\"' >> $YOCTO_HOME/build-platoon/conf/local.conf"
+                        sh "echo 'DISTRO = \"harmonyOS\"' >> $YOCTO_HOME/build-platoon/conf/local.conf"
+                        sh "echo 'PREFERRED_PROVIDER_virtual/kernel = \"linux-harmony\"' >> $YOCTO_HOME/build-platoon/conf/local.conf"
+                    }
+
+		    }
+
             }
         }
-        stage('Prepare environment') {
+
+        stage('Build Image') {
             steps {
-                sh """
-                    # Provide build environment
-                    echo "${ENV_FILE}" > .env
-                    
-                    # Rebuild the environment itself
-                    if [ "${params.RecreateEnvironment}" = "true" ]; then
-                        ./run-env.sh --rebuild echo "Completed environment setup!"
-                    fi
-                    
-                    # Optionally clean or wipe
-                    if [ "${params.Cache}" = "Wipe" ]; then
-                        # Keep the sstatecache but remove the workdir
-                        rm -rf build/tmp
-                    elif [ "${params.Cache}" = "Clean" ]; then
-                        ./run-env.sh bitbake -c cleanall '${params.Image}'
-                    fi
-                """
-            }
-        }
-        stage("Build") {
-            steps {
-                sh "./run-env.sh bitbake '${params.Image}'"
+                script {
+                    sh "cd $YOCTO_HOME"
+                    sh '''#!/bin/bash
+                        source $YOCTO_HOME/poky/oe-init-build-env build-platoon
+                        bitbake harmony-dev-image
+                    '''
+                }
             }
         }
     }
+
     post {
+
         success {
-            archiveArtifacts artifacts: 
-                """
-                    build/tmp/deploy/images/${MACHINE}/${params.Image}-${MACHINE}-*.wic.bz2,
-                    build/tmp/deploy/images/${MACHINE}/${params.Image}-${MACHINE}-*.wic.bmap,
-                    build/tmp/deploy/images/${MACHINE}/${params.Image}-${MACHINE}-*.raucb
-                """.stripIndent().stripMargin(),
-                allowEmptyArchive: true,
-                onlyIfSuccessful: true,
-                followSymlinks: true
+            echo 'Yocto Initialization Pipeline: Success!'
+	      setBuildStatus("Build succeeded", "SUCCESS");
+
+ 
+        }
+
+        failure {
+            echo 'Yocto Initialization Pipeline: Fail'
+	      setBuildStatus("Build succeeded", "FAILURE");
+
         }
     }
 }

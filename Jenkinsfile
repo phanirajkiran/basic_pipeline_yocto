@@ -9,7 +9,7 @@ pipeline {
                 rm -fr *
                 git clone git://git.yoctoproject.org/poky
                 cd poky
-                git checkout -b dunfell origin/sumo
+                git checkout -b dunfell 
                 '''
             }
         }

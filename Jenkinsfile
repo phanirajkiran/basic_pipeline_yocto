@@ -35,30 +35,6 @@ EOF
            '''
       }
     }
-    stage('Archive artifacts') {
-      steps {
-        zip archive: true, dir: 'build/buildhistory', exclude: '', glob: '', zipFile: 'build/buildhistory.zip'
-        zip archive: true, dir: 'build/tmp/log', exclude: '', glob: '', zipFile: 'build/log.zip'
-        archiveArtifacts artifacts: 'build/tmp/deploy/images/**/*', fingerprint: true, followSymlinks: false
-      }
-    }
-    stage('Publish release') {
-      when {
-        buildingTag()
-      }
-      environment {
-        PUBLISH_DIR = "/var/jenkins/releases/${env.JOB_NAME}/${env.CI_BUILD_ID}/"
-      }
-      steps {
-        sh '''
-           mkdir -p ${PUBLISH_DIR}
-           cp -R --no-dereference --preserve=links build/buildhistory ${PUBLISH_DIR}
-           cp -R --no-dereference --preserve=links build/tmp/deploy/cve ${PUBLISH_DIR}
-           cp -R --no-dereference --preserve=links build/tmp/deploy/images ${PUBLISH_DIR}
-           cp -R --no-dereference --preserve=links build/tmp/deploy/licenses ${PUBLISH_DIR}
-           cp -R --no-dereference --preserve=links build/tmp/log ${PUBLISH_DIR}
-           '''
-      }
-    }
+
   }
 }

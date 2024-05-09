@@ -1,39 +1,92 @@
-#!/usr/bin/env groovy
-
 pipeline {
-  options {
-    disableConcurrentBuilds()
-  }
-  agent {
-    docker {
-      image 'crops/yocto:ubuntu-20.04-base'
-      args '-v /var/jenkins:/var/jenkins'
-      reuseNode true
+    agent any
+    parameters {
+        choice(
+            name: 'Image', 
+            choices: ['full-image', 'system-update-bundle', 'recovery-update-bundle'], 
+            description: 'Select the build artefact to be created.')
+        choice(
+            name: 'Cache', 
+            choices: ['Wipe', 'Keep', 'Clean'], 
+            description: '''Select how the build cache should be handled. 
+                >Wipe< erases the Yocto workdir,
+                >Keep< reuses the existing build cache and
+                >Clean< runs bitbake cleanup for the build target.
+                ''')
+        booleanParam(
+            name: 'RecreateEnvironment',
+            defaultValue: false,
+            description: 'Recreate the build environment?')
     }
-  }
-  stages {
-    stage('Build core-image-minimal') {
-      steps {
-        sh '''
-           mkdir -p build/conf
-           cat << EOF > build/conf/local.conf
-
-SSTATE_DIR = "/var/jenkins/bbcache/sstate"
-DL_DIR = "/var/jenkins/bbcache/downloads"
-BB_SIGNATURE_HANDLER = "OEEquivHash"
-BB_HASHSERVE = "hashserv-rw:8686"
-MACHINE = "qemux86-64"
-DISTRO = "poky"
-INHERIT += "rm_work buildhistory cve-check"
-BUILDHISTORY_COMMIT = "0"
-BB_NUMBER_THREADS = "2"
-EOF
-
-           . ./oe-init-build-env build
-           bitbake core-image-minimal
-           '''
-      }
+    environment {
+        BRANCH = 'kirkstone'
+        MACHINE = 'raspberrypi3'
+        RELEASE_TAG = "${BRANCH}"
+        ENV_FILE = """\
+            USER=jenkins
+            MOUNT_VOLUME=jenkins_agent_workspace:${WORKSPACE}/..
+            PROJECT_ROOT=${WORKSPACE}
+            POKY_DIR=sources/poky
+            BUILD_DIR=build
+            PROJECT_TEMPLATE_DIR=config
+            MACHINE=${MACHINE}
+            BSP_LAYERS=${WORKSPACE}/sources/boards/raspberrypi/meta-raspberrypi,${WORKSPACE}/sources/boards/raspberrypi/meta-raspberrypi-multiboot-update
+            ROOT_PWD=super-secret-root-pwd
+            KEYBOARD_PROFILE=de-latin1.map
+            NETWORK_STATIC_IP=127.0.0.1
+            WIFI_SSID=Dummy-Network
+            WIFI_PWD=also-secret-network-pwd
+        """.stripIndent().stripMargin()
     }
-
-  }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "${BRANCH}"]],
+                    userRemoteConfigs: [[url: 'https://github.com/JSydll/emx-base-stack']],
+                    extensions: [[$class: 'SubmoduleOption', recursiveSubmodules: true]]
+                ])
+            }
+        }
+        stage('Prepare environment') {
+            steps {
+                sh """
+                    # Provide build environment
+                    echo "${ENV_FILE}" > .env
+                    
+                    # Rebuild the environment itself
+                    if [ "${params.RecreateEnvironment}" = "true" ]; then
+                        ./run-env.sh --rebuild echo "Completed environment setup!"
+                    fi
+                    
+                    # Optionally clean or wipe
+                    if [ "${params.Cache}" = "Wipe" ]; then
+                        # Keep the sstatecache but remove the workdir
+                        rm -rf build/tmp
+                    elif [ "${params.Cache}" = "Clean" ]; then
+                        ./run-env.sh bitbake -c cleanall '${params.Image}'
+                    fi
+                """
+            }
+        }
+        stage("Build") {
+            steps {
+                sh "./run-env.sh bitbake '${params.Image}'"
+            }
+        }
+    }
+    post {
+        success {
+            archiveArtifacts artifacts: 
+                """
+                    build/tmp/deploy/images/${MACHINE}/${params.Image}-${MACHINE}-*.wic.bz2,
+                    build/tmp/deploy/images/${MACHINE}/${params.Image}-${MACHINE}-*.wic.bmap,
+                    build/tmp/deploy/images/${MACHINE}/${params.Image}-${MACHINE}-*.raucb
+                """.stripIndent().stripMargin(),
+                allowEmptyArchive: true,
+                onlyIfSuccessful: true,
+                followSymlinks: true
+        }
+    }
 }
